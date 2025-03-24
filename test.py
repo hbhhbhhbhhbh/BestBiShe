@@ -1,220 +1,121 @@
 import argparse
 import logging
 import os
-import random
-import sys
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torchvision.transforms as transforms
-import torchvision.transforms.functional as TF
-from pathlib import Path
-from torch import optim
-from torch.utils.data import DataLoader, random_split
-from tqdm import tqdm
-import time
-import wandb
+from glob import glob
+
 import numpy as np
-import matplotlib.pyplot as plt
-from evaluate import evaluate
-from unet.unet_model import UNet
+import torch
+import torch.nn.functional as F
+from PIL import Image
+from torchvision import transforms
+from unet.UResnet import BasicBlock,UResnet
+from utils.data_loading import BasicDataset
+from unet import UNet, UNetCBAM, UNetCBAMResnet
+from utils.utils import plot_img_and_mask
 from unet.Dulbranch_res import DualBranchUNetCBAMResnet
-from utils.data_loading import BasicDataset, CarvanaDataset
-from utils.dice_score import dice_loss
-from torch.utils.tensorboard import SummaryWriter
-from utils.distance_transform import one_hot2dist, SurfaceLoss
-from utils.dice_score import multiclass_dice_coeff, dice_coeff
-class CombinedLoss(nn.Module):
-    def __init__(self, idc, surface_loss_weight=0.5):
-        super(CombinedLoss, self).__init__()
-        self.idc = idc
-        self.surface_loss_weight = surface_loss_weight
-        self.ce_loss = nn.CrossEntropyLoss()
-        self.surface_loss = SurfaceLoss(idc=idc)
+from unet.Dulbranch_res_Copy1 import DualBranchUNetCBAMResnet1
+from unet.UResnet import UResnet
+def predict_img(net, full_img, device, scale_factor=1, out_threshold=0.5):
+    net.eval()
+    img = torch.from_numpy(BasicDataset.preprocess(None, full_img, scale_factor, is_mask=False))
+    img = img.unsqueeze(0)
+    img = img.to(device=device, dtype=torch.float32)
 
-    def forward(self, logits, edge_logits, targets, dist_maps, writer, global_step):
-        ce_loss = self.ce_loss(logits, targets)
-        
-        edge_logits = torch.sigmoid(edge_logits)
-        surface_loss = self.surface_loss(edge_logits, dist_maps)
-        print("surface_loss: ", surface_loss)
-        writer.add_scalar('surface_loss/surface_loss', surface_loss, global_step)
-        total_loss = ce_loss + surface_loss*self.surface_loss_weight
-        writer.add_scalar('surface_loss/surface_loss_weight', self.surface_loss_weight, global_step)
-        return total_loss
-
-def overlay_two_masks(groundtruth_mask, pred_mask, alpha=0.5, pred_alpha=0.5):
-    groundtruth_mask = groundtruth_mask.squeeze(0).cpu().numpy()
-    pred_mask = pred_mask.squeeze(0).cpu().numpy()
-
-    overlay_image = np.zeros((groundtruth_mask.shape[0], groundtruth_mask.shape[1], 3))
-
-    overlay_image[groundtruth_mask == 1] = [0, 1, 0]
-    overlay_image = overlay_image * (1 - alpha)
-
-    pred_overlay = np.zeros_like(overlay_image)
-    pred_overlay[pred_mask == 1] = [1, 0, 0]
-    overlay_image = overlay_image + pred_overlay * pred_alpha
-
-    return overlay_image
-
-def overlay_mask_on_image(image, mask, alpha=0.5):
-    image = image.permute(1, 2, 0).cpu().numpy()
-    mask = mask.squeeze(0).cpu().numpy()
-
-    mask_overlay = np.zeros_like(image)
-    mask_overlay[mask == 1] = [1, 1, 1]
-
-    overlay = image * (1 - alpha) + mask_overlay * alpha
-
-    return overlay
-
-def test_model(model, device, test_loader, criterion, model_name="DBUCR"):
-    model.eval()
-    total_dice_score = 0
-    total_pixel_accuracy = 0
-    total_iou = 0
-    total_f1 = 0
-    total_recall = 0
-    total_precision = 0
-    total_batches = 0
-
-    writer = SummaryWriter(log_dir=f'/root/tf-logs/{time.strftime("%Y-%m-%d_%H-%M-%S")}/{model_name}')
-    
     with torch.no_grad():
-        for batch_idx, batch in enumerate(test_loader):
-            image, masks_true = batch['image'], batch['mask']
+        output= net(img)
+        output=output.cpu()
+        output = F.interpolate(output, (full_img.size[1], full_img.size[0]), mode='bilinear')
+        if net.n_classes > 1:
+            mask = output.argmax(dim=1)
+        else:
+            mask = torch.sigmoid(output) > out_threshold
 
-            # move images and labels to correct device and type
-            image = image.to(device=device, dtype=torch.float32, memory_format=torch.channels_last)
-            masks_true = masks_true.to(device=device, dtype=torch.long)
+    return mask[0].long().squeeze().numpy()
 
-            # predict the mask
-            masks_pred, _ = model(image)
-            
-            mask_pred = F.softmax(masks_pred, dim=1)  # Get probability map
-            mask_pred = mask_pred.argmax(dim=1)  # Get predicted class per pixel
-            mask_pred = F.one_hot(mask_pred, model.n_classes).permute(0, 3, 1, 2).float()
 
-            # Convert true mask to one-hot encoding
-            mask_true = F.one_hot(masks_true, model.n_classes).permute(0, 3, 1, 2).float()
-
-            # Compute Dice score
-            dice=multiclass_dice_coeff(mask_pred[:, 1:], mask_true[:, 1:], reduce_batch_first=False)
-            total_dice_score += dice
-
-            # Compute Pixel Accuracy
-            pixel_accuracy = (mask_pred.argmax(dim=1) == mask_true.argmax(dim=1)).float().mean().item()
-            total_pixel_accuracy += pixel_accuracy
-
-            # Compute IoU for each class
-            iou_classwise = []
-            f1_classwise = []
-            recall_classwise = []
-            precision_classwise = []
-            for c in range(1, model.n_classes):  # We skip background class (index 0)
-                intersection = torch.sum(mask_pred[:, c] * mask_true[:, c])
-                union = torch.sum(mask_pred[:, c]) + torch.sum(mask_true[:, c])
-                iou = intersection / (union - intersection + 1e-6)
-                iou_classwise.append(iou.item())
-
-                # Compute F1, Recall, and Precision for each class
-                true_positives = torch.sum(mask_pred[:, c] * mask_true[:, c])
-                false_positives = torch.sum(mask_pred[:, c] * (1 - mask_true[:, c]))
-                false_negatives = torch.sum((1 - mask_pred[:, c]) * mask_true[:, c])
-
-                precision = true_positives / (true_positives + false_positives + 1e-6)
-                recall = true_positives / (true_positives + false_negatives + 1e-6)
-                f1 = 2 * (precision * recall) / (precision + recall + 1e-6)
-
-                f1_classwise.append(f1.item())
-                recall_classwise.append(recall.item())
-                precision_classwise.append(precision.item())
-
-            mean_iou = sum(iou_classwise) / len(iou_classwise)  # Mean IoU across all classes (ignoring background)
-            mean_f1 = sum(f1_classwise) / len(f1_classwise)
-            mean_recall = sum(recall_classwise) / len(recall_classwise)
-            mean_precision = sum(precision_classwise) / len(precision_classwise)
-
-            total_iou += mean_iou
-            total_f1 += mean_f1
-            total_recall += mean_recall
-            total_precision += mean_precision
-            
-            
-            overlay_image = overlay_two_masks(
-                        masks_true[0],  # Ground truth mask
-                        masks_pred.argmax(dim=1)[0],  # Prediction mask
-                        alpha=0.5,  # Ground truth mask 的透明度
-                        pred_alpha=0.7  # Prediction mask 的透明度
-                    )
-            writer.add_image('Test-dual-Res/MaskOverlay', torch.tensor(overlay_image).permute(2, 0, 1), batch_idx)
-            overlay_image = overlay_mask_on_image(image[0], masks_pred.argmax(dim=1)[0])
-
-            writer.add_image('Test-dual-Res/Overlay', torch.tensor(overlay_image).permute(2, 0, 1), batch_idx)
-            writer.add_image('Test-dual-Res/Image', image[0], batch_idx)  
-            writer.add_image('Test-dual-Res/Mask', masks_true[0].unsqueeze(0), batch_idx)  
-            writer.add_image('Test-dual-Res/Prediction', masks_pred.argmax(dim=1)[0].unsqueeze(0), batch_idx)  
-            
-    # Calculate average metrics
+def get_args():
+    parser = argparse.ArgumentParser(description='Predict masks from input images')
+    parser.add_argument('--model', '-m', default='./checkpoints-dual-update/checkpoint_epoch50.pth', metavar='FILE',
+                        help='Specify the file in which the model is stored')
+    parser.add_argument('--input', '-i', metavar='INPUT', required=True,
+                        help='Folder containing input images')
+    parser.add_argument('--output', '-o', metavar='OUTPUT', required=True,
+                        help='Folder to save output images')
+    parser.add_argument('--viz', '-v', action='store_true',
+                        help='Visualize the images as they are processed')
+    parser.add_argument('--no-save', '-n', action='store_true', help='Do not save the output masks')
+    parser.add_argument('--mask-threshold', '-t', type=float, default=0.5,
+                        help='Minimum probability value to consider a mask pixel white')
+    parser.add_argument('--scale', '-s', type=float, default=0.5,
+                        help='Scale factor for the input images')
+    parser.add_argument('--bilinear', action='store_true', default=False, help='Use bilinear upsampling')
+    parser.add_argument('--classes', '-c', type=int, default=2, help='Number of classes')
     
-                
-           
-            writer.add_scalar('Dice/Test', dice, batch_idx)
-            writer.add_scalar('Accuracy/Test', pixel_accuracy, batch_idx)
-            writer.add_scalar('IoU/Test', mean_iou, batch_idx)
-            writer.add_scalar('f1/Test', mean_f1, batch_idx)
-            writer.add_scalar('Recall/Test', mean_recall, batch_idx)
-            writer.add_scalar('Precision/Test', mean_precision, batch_idx)
-            total_batches+=1
+    return parser.parse_args()
 
-    avg_dice_score = total_dice_score / total_batches
-    avg_pixel_accuracy = total_pixel_accuracy / total_batches
-    avg_iou = total_iou / total_batches
-    avg_f1 = total_f1 / total_batches
-    avg_recall = total_recall / total_batches
-    avg_precision = total_precision / total_batches
-    writer.add_scalar('Dice/avgTest', avg_dice_score, 0)
-    writer.add_scalar('Accuracy/avgTest',avg_pixel_accuracy, 0)
-    writer.add_scalar('IoU/avgTest', avg_iou, 0)
-    writer.add_scalar('f1/avgTest', avg_f1, 0)
-    writer.add_scalar('Recall/avgTest', avg_recall, 0)
-    writer.add_scalar('Precision/avgTest', avg_precision, 0)
 
-    writer.close()
+def mask_to_red(mask: np.ndarray):
+    """
+    Convert mask to a red overlay.
+    """
+    # Create an empty RGB image
+    red_mask = np.zeros((mask.shape[0], mask.shape[1], 3), dtype=np.uint8)
+    # Set the red channel where the mask is 1
+    red_mask[mask == 1] = [255, 0, 0]  # Red color
+    return red_mask
 
-    return avg_dice_score, avg_pixel_accuracy, avg_iou, avg_f1, avg_recall, avg_precision
 
-# 加载模型
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+if __name__ == '__main__':
+    args = get_args()
+    logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
-model = DualBranchUNetCBAMResnet(n_classes=2, n_channels=3).to(device)
+    # Create output directory if it doesn't exist
+    os.makedirs(args.output, exist_ok=True)
 
-# 加载模型状态字典
-checkpoint = torch.load('Dual.pth', map_location=device)
+    # Get all image files in the input directory
+    in_files = glob(os.path.join(args.input, '*.*'))  # Supports all image formats
+    logging.info(f'Found {len(in_files)} images in {args.input}')
 
-# 删除状态字典中不需要的键
-if 'mask_values' in checkpoint:
-    del checkpoint['mask_values']
+    # Load the model
+    net= DualBranchUNetCBAMResnet1(n_classes=args.classes, n_channels=3,writer=None)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    logging.info(f'Loading model {args.model}')
+    logging.info(f'Using device {device}')
 
-# 加载模型状态，忽略不匹配的键
-model.load_state_dict(checkpoint, strict=False)
-model.to(memory_format=torch.channels_last)
+    net.to(device=device)
+    state_dict = torch.load(args.model, map_location=device)
 
-# 初始化损失函数
-criterion = CombinedLoss(idc=[1], surface_loss_weight=1)
+    del state_dict['mask_values']
 
-# 加载测试数据集
-test_dir_img = Path('./data/imgs/test/')
-test_dir_mask = Path('./data/masks/test/')
-test_dataset = CarvanaDataset(test_dir_img, test_dir_mask,0.5)
+    net.load_state_dict(state_dict)
+    logging.info('Model loaded!')
 
-test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=0)
-# 测试模型
-test_dice, test_acc, test_iou, test_f1, test_recall, test_precision = test_model(
-    model=model,
-    device=device,
-    test_loader=test_loader,
-    criterion=criterion,
-    model_name="DBUCR"
-)
+    # Process each image
+    for i, filename in enumerate(in_files):
+        logging.info(f'Predicting image {filename} ...')
+        img = Image.open(filename)
+
+        # Predict the mask
+        mask = predict_img(net=net,
+                           full_img=img,
+                           scale_factor=args.scale,
+                           out_threshold=args.mask_threshold,
+                           device=device)
+
+        # Convert mask to red overlay
+        red_mask = mask_to_red(mask)
+
+        # Blend the original image with the red mask
+        img_array = np.array(img)
+        blended = Image.fromarray(np.where(red_mask != 0, red_mask, img_array))
+
+        # Save the result
+        if not args.no_save:
+            out_filename = os.path.join(args.output, os.path.basename(filename))
+            blended.save(out_filename)
+            logging.info(f'Mask saved to {out_filename}')
+
+        # Visualize the result
+        if args.viz:
+            logging.info(f'Visualizing results for image {filename}, close to continue...')
+            plot_img_and_mask(img, mask)

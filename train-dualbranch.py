@@ -1,4 +1,5 @@
 # train-dualbranch.py
+import cv2
 import argparse
 import logging
 import os
@@ -19,11 +20,48 @@ import numpy as np
 import matplotlib.pyplot as plt
 from evaluate import evaluate
 from unet.unet_model import UNet
+from unet.Dulbranch_res_Copy1 import DualBranchUNetCBAMResnet1
+
 from unet.Dulbranch_res import DualBranchUNetCBAMResnet
 from utils.data_loading import BasicDataset, CarvanaDataset
 from utils.dice_score import dice_loss
 from torch.utils.tensorboard import SummaryWriter
 from utils.distance_transform import one_hot2dist, SurfaceLoss
+def process_images(images):
+    """
+    处理图像：RGB → HSV → 处理 V 分量 → 转换回 RGB
+    :param images: 输入图像，形状为 [batch_size, channels, height, width]
+    :return: 处理后的图像，形状为 [batch_size, channels, height, width]
+    """
+    # 将 PyTorch 张量转换为 NumPy 数组
+    images_np = images.cpu().numpy()
+    images_np = np.transpose(images_np, (0, 2, 3, 1))  # 调整为 [batch_size, height, width, channels]
+    images_np = (images_np * 255).astype(np.uint8)  # 将数据范围从 [0, 1] 转换为 [0, 255]
+
+    # 对每张图像进行处理
+    processed_images = []
+    for img in images_np:
+        # RGB → HSV
+        hsv_image = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
+        
+        # 分解 HSV 图像
+        h, s, v = cv2.split(hsv_image)
+        
+        # 对 V 分量进行自适应直方图均衡化
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        v_processed = clahe.apply(v)
+        
+        # 融合处理后的 V 分量
+        hsv_processed = cv2.merge([h, s, v_processed])
+        
+        # HSV → RGB
+        rgb_processed = cv2.cvtColor(hsv_processed, cv2.COLOR_HSV2RGB)
+        processed_images.append(rgb_processed)
+
+    # 将 NumPy 数组转换回 PyTorch 张量
+    processed_images = np.stack(processed_images)  # 形状为 [batch_size, height, width, channels]
+    processed_images = torch.from_numpy(processed_images).permute(0, 3, 1, 2).float() / 255.0  # 调整为 [batch_size, channels, height, width]
+    return processed_images.to(images.device)  # 移动到 GPU
 # train-dualbranch.py
 class CombinedLoss(nn.Module):
     def __init__(self, idc, surface_loss_weight=0.5):
@@ -46,9 +84,9 @@ class CombinedLoss(nn.Module):
         total_loss = ce_loss +surface_loss*self.surface_loss_weight
         writer.add_scalar('surface_loss/surface_loss_weight', self.surface_loss_weight, global_step)
         return total_loss
-dir_img = Path('./data-pre/imgs/train/')
-dir_mask = Path('./data-pre/masks/train/')
-dir_checkpoint = Path('./checkpoints-res-dual/')
+dir_img = Path('./data-after/imgs/train/')
+dir_mask = Path('./data-after/masks/train/')
+dir_checkpoint = Path('./checkpoints-res-after/')
 
 def overlay_two_masks(groundtruth_mask, pred_mask, alpha=0.5, pred_alpha=0.5):
     """
@@ -170,7 +208,9 @@ def train_model(
                 dist_maps = torch.cat([dist_maps_single, dist_maps_single], dim=1)  # 复制第一个通道创建第二个通道
 
                 with torch.autocast(device.type if device.type != 'mps' else 'cpu', enabled=amp):
+                    # p_images = process_images(images)
                     masks_pred, edge_logits = model(images)
+                    # print(masks_pred)
                     loss = criterion(masks_pred, edge_logits, true_masks, dist_maps,writer,global_step)
                     # print("masks_pred: ",masks_pred.shape)
                     total_loss = loss+dice_loss(
@@ -213,6 +253,8 @@ def train_model(
                     # 将合成图像记录到 TensorBoard
                     writer.add_image('Train-dual-Res/Overlay', torch.tensor(overlay_image).permute(2, 0, 1), global_step)
                     writer.add_image('Train-dual-Res/Image', images[0], global_step)  # Shape: [3, 128, 128]
+                    # writer.add_image('Train-dual-Res/p_Image', p_images[0], global_step)  # Shape: [3, 128, 128]
+                    
                     writer.add_image('Train-dual-Res/Mask', true_masks[0].unsqueeze(0), global_step)  # Shape: [1, 128, 128]
                     writer.add_image('Train-dual-Res/Prediction', masks_pred.argmax(dim=1)[0].unsqueeze(0), global_step)  # Shape: [1, 128, 128]
 
@@ -266,7 +308,7 @@ def train_model(
 def get_args():
     parser = argparse.ArgumentParser(description='Train the UNet on images and target masks')
     parser.add_argument('--epochs', '-e', metavar='E', type=int, default=100, help='Number of epochs')
-    parser.add_argument('--batch-size', '-b', dest='batch_size', metavar='B', type=int, default=12, help='Batch size')
+    parser.add_argument('--batch-size', '-b', dest='batch_size', metavar='B', type=int, default=32, help='Batch size')
     parser.add_argument('--learning-rate', '-l', metavar='LR', type=float, default=1e-5,
                         help='Learning rate', dest='lr')
     parser.add_argument('--load', '-f', type=str, default=False, help='Load model from a .pth file')

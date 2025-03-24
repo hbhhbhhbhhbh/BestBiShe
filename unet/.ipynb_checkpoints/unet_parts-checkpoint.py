@@ -4,7 +4,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+#详细改进流程和操作，请关注B站博主：AI学术叫叫兽 
+#详细改进流程和操作，请关注B站博主：AI学术叫叫兽 
+#详细改进流程和操作，请关注B站博主：AI学术叫叫兽 
 
+    #详细改进流程和操作，请关注B站博主：AI学术叫叫兽 
 class DoubleConv(nn.Module):
     """(convolution => [BN] => ReLU) * 2"""
 

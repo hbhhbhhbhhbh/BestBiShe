@@ -3,15 +3,7 @@ import torch.nn.functional as F
 from tqdm import tqdm
 
 from utils.dice_score import multiclass_dice_coeff, dice_coeff
-#我是让科研变的更简单的叫叫兽！国奖，多篇SCI，深耕目标检测领域，多项竞赛经历，拥有软件著作权，核心期刊等成果。实战派up主，只做干货！让你不走弯路，直冲成果输出！！
 
-# 大家关注我的B站：Ai学术叫叫兽
-# 链接在这：https://space.bilibili.com/3546623938398505
-# 科研不痛苦，跟着叫兽走！！！
-# 更多捷径——B站干货见！！！
-
-# 本环境和资料纯粉丝福利！！！
-# 必须让我叫叫兽的粉丝有牌面！！！冲吧，青年们，遥遥领先！！！
 @torch.inference_mode()
 def evaluate(net, dataloader, device, amp):
     net.eval()
@@ -19,6 +11,9 @@ def evaluate(net, dataloader, device, amp):
     total_dice_score = 0
     total_pixel_accuracy = 0
     total_iou = 0
+    total_f1 = 0
+    total_recall = 0
+    total_precision = 0
     total_batches = 0
 
     # iterate over the validation set
@@ -31,7 +26,7 @@ def evaluate(net, dataloader, device, amp):
             mask_true = mask_true.to(device=device, dtype=torch.long)
 
             # predict the mask
-            mask_pred,_ = net(image)
+            mask_pred= net(image)
 
             if net.n_classes == 1:
                 # For binary classification
@@ -40,7 +35,7 @@ def evaluate(net, dataloader, device, amp):
 
                 # Compute Dice score
                 total_dice_score += dice_coeff(mask_pred, mask_true, reduce_batch_first=False)
-                
+
                 # Compute Pixel Accuracy
                 pixel_accuracy = (mask_pred == mask_true).float().mean().item()
                 total_pixel_accuracy += pixel_accuracy
@@ -50,6 +45,19 @@ def evaluate(net, dataloader, device, amp):
                 union = torch.sum(mask_pred) + torch.sum(mask_true)
                 iou = intersection / (union - intersection + 1e-6)
                 total_iou += iou.item()
+
+                # Compute F1, Recall, and Precision
+                true_positives = torch.sum(mask_pred * mask_true)
+                false_positives = torch.sum(mask_pred * (1 - mask_true))
+                false_negatives = torch.sum((1 - mask_pred) * mask_true)
+
+                precision = true_positives / (true_positives + false_positives + 1e-6)
+                recall = true_positives / (true_positives + false_negatives + 1e-6)
+                f1 = 2 * (precision * recall) / (precision + recall + 1e-6)
+
+                total_f1 += f1.item()
+                total_recall += recall.item()
+                total_precision += precision.item()
 
             else:
                 # For multi-class classification
@@ -70,13 +78,37 @@ def evaluate(net, dataloader, device, amp):
 
                 # Compute IoU for each class
                 iou_classwise = []
+                f1_classwise = []
+                recall_classwise = []
+                precision_classwise = []
                 for c in range(1, net.n_classes):  # We skip background class (index 0)
                     intersection = torch.sum(mask_pred[:, c] * mask_true[:, c])
                     union = torch.sum(mask_pred[:, c]) + torch.sum(mask_true[:, c])
                     iou = intersection / (union - intersection + 1e-6)
                     iou_classwise.append(iou.item())
+
+                    # Compute F1, Recall, and Precision for each class
+                    true_positives = torch.sum(mask_pred[:, c] * mask_true[:, c])
+                    false_positives = torch.sum(mask_pred[:, c] * (1 - mask_true[:, c]))
+                    false_negatives = torch.sum((1 - mask_pred[:, c]) * mask_true[:, c])
+
+                    precision = true_positives / (true_positives + false_positives + 1e-6)
+                    recall = true_positives / (true_positives + false_negatives + 1e-6)
+                    f1 = 2 * (precision * recall) / (precision + recall + 1e-6)
+
+                    f1_classwise.append(f1.item())
+                    recall_classwise.append(recall.item())
+                    precision_classwise.append(precision.item())
+
                 mean_iou = sum(iou_classwise) / len(iou_classwise)  # Mean IoU across all classes (ignoring background)
+                mean_f1 = sum(f1_classwise) / len(f1_classwise)
+                mean_recall = sum(recall_classwise) / len(recall_classwise)
+                mean_precision = sum(precision_classwise) / len(precision_classwise)
+
                 total_iou += mean_iou
+                total_f1 += mean_f1
+                total_recall += mean_recall
+                total_precision += mean_precision
 
             total_batches += 1
 
@@ -84,6 +116,9 @@ def evaluate(net, dataloader, device, amp):
     avg_dice_score = total_dice_score / total_batches
     avg_pixel_accuracy = total_pixel_accuracy / total_batches
     avg_iou = total_iou / total_batches
+    avg_f1 = total_f1 / total_batches
+    avg_recall = total_recall / total_batches
+    avg_precision = total_precision / total_batches
 
     net.train()
-    return avg_dice_score, avg_pixel_accuracy, avg_iou
+    return avg_dice_score, avg_pixel_accuracy, avg_iou, avg_f1, avg_recall, avg_precision
