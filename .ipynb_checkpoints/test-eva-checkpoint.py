@@ -32,8 +32,8 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 amp = False  # 启用混合精度
 
 # 2. 加载测试数据集
-dir_img_test = Path('./data-pre/imgs/test/')  # 测试集图像路径
-dir_mask_test = Path('./data-pre/masks/test/')  # 测试集掩码路径
+dir_img_test = Path(f'./data1_resized/imgs/test/')  # 测试集图像路径
+dir_mask_test = Path(f'./data1_resized/masks/test/')  # 测试集掩码路径
 img_scale = 0.5  # 图像缩放比例
 
 # 创建测试数据集
@@ -48,7 +48,7 @@ test_loader = DataLoader(test_dataset, batch_size=8, shuffle=False, num_workers=
 # 3. 加载训练好的模型
 model = DualBranchUNetCBAMResnet1(n_channels=3, n_classes=2,writer=None)  # 实例化模型，替换为您的模型类
 
-state_dict = torch.load("checkpoints-dual-update/checkpoint_epoch50.pth")
+state_dict = torch.load("checkpoints-dual-data1_resized/checkpoint_epoch50.pth")
 del state_dict['mask_values']
 model.load_state_dict(state_dict)
 model = model.to(device)

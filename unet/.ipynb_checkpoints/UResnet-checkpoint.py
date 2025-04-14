@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 from .CBAM import *
+from .MSAA import *
 from .ASPP import *
 class VGGBlock(nn.Module):
     def __init__(self, in_channels, middle_channels, out_channels):
@@ -164,6 +165,12 @@ class UResnet(nn.Module):
         self.ASPP2 = ASPP(256,256)
         self.ASPP3 = ASPP(512,512)
         self.ASPP4=ASPP(1024,1024)
+        self.MSAA0=MSAA(64)
+        self.MSAA=MSAA(128)
+        self.MSAA1 = MSAA(256)
+        self.MSAA2 = MSAA(512)
+        self.MSAA3 = MSAA(1024 )
+        self.MSAA4 = MSAA(2048)
         if self.deep_supervision:
             self.final1 = nn.Conv2d(nb_filter[0], num_classes, kernel_size=1)
             self.final2 = nn.Conv2d(nb_filter[0], num_classes, kernel_size=1)
@@ -183,20 +190,25 @@ class UResnet(nn.Module):
     def forward(self, input):
     # 编码器部分
         x0_0 = self.conv0_0(input)
-        x0_0 = self.cbam(x0_0)
+        x0_0 = self.MSAA0(x0_0)
+        x0_0 = self.ASPP(x0_0)
         
         x1_0 = self.conv1_0(self.pool(x0_0))
-        x1_0 = self.cbam1(x1_0)
+        x1_0 = self.MSAA(x1_0)
+        x1_0 = self.ASPP1(x1_0)
         
         x2_0 = self.conv2_0(self.pool(x1_0))
-        x2_0 = self.cbam2(x2_0)
+        x2_0 = self.MSAA1(x2_0)
+        x2_0 = self.ASPP2(x2_0)
         
         x3_0 = self.conv3_0(self.pool(x2_0))
-        x3_0 = self.cbam3(x3_0)
+        x3_0 = self.MSAA2(x3_0)
+        x3_0 = self.ASPP3(x3_0)
         
         x4_0 = self.conv4_0(self.pool(x3_0))
         # print("x4: ",x4_0.shape)
-        x4_0 = self.ASPP4(x4_0)
+        x4_0 = self.cbam4(x4_0)
+        
         
         
         # 解码器部分
@@ -230,19 +242,19 @@ class UResnet(nn.Module):
 
 
         x3_1 = self.conv3_1(torch.cat([x3_0, self.Up(x4_0, x3_0)], 1))
-        x3_1 = self.ASPP3(x3_1)
+        x3_1 = self.cbam3(x3_1)
         
 
         x2_2 = self.conv2_2(torch.cat([x2_0, x2_1, self.Up(x3_1, x2_0)], 1))
-        x2_2 = self.ASPP2(x2_2)
+        x2_2 = self.cbam2(x2_2)
         
 
         x1_3 = self.conv1_3(torch.cat([x1_0, x1_1, x1_2, self.Up(x2_2, x1_0)], 1))
-        x1_3 = self.ASPP1(x1_3)
+        x1_3 = self.cbam1(x1_3)
         
 
         x0_4 = self.conv0_4(torch.cat([x0_0, x0_1, x0_2, x0_3, self.Up(x1_3, x0_0)], 1))
-        x0_4 = self.ASPP(x0_4)
+        x0_4 = self.cbam(x0_4)
         
 
         # 输出部分

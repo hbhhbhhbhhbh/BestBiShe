@@ -84,9 +84,12 @@ class CombinedLoss(nn.Module):
         total_loss = ce_loss +surface_loss*self.surface_loss_weight
         writer.add_scalar('surface_loss/surface_loss_weight', self.surface_loss_weight, global_step)
         return total_loss
-dir_img = Path('./data-after/imgs/train/')
-dir_mask = Path('./data-after/masks/train/')
-dir_checkpoint = Path('./checkpoints-dual-update/')
+dataset_name='data1_resized_enhanced'
+dir_img = Path(f'./{dataset_name}/imgs/train/')
+dir_mask = Path(f'./{dataset_name}/masks/train/')
+val_img = Path(f'./{dataset_name}/imgs/val/')
+val_mask = Path(f'./{dataset_name}/masks/val/')
+dir_checkpoint = Path(f'./checkpoints-dual-{dataset_name}/')
 
 def overlay_two_masks(groundtruth_mask, pred_mask, alpha=0.5, pred_alpha=0.5):
     """
@@ -152,19 +155,27 @@ def train_model(
         momentum: float = 0.999,
         gradient_clipping: float = 1.0,
 ):
+    transform = transforms.Compose([
+    transforms.Resize((256, 256)),  # 调整大小为 256x256
+    transforms.ToTensor(),          # 转换为张量
+])
     # 1. Create dataset
     try:
-        dataset = CarvanaDataset(dir_img, dir_mask, img_scale)
+        train_set = CarvanaDataset(dir_img, dir_mask, img_scale)
+        val_set = CarvanaDataset(val_img, val_mask, img_scale)
+        
     except (AssertionError, RuntimeError, IndexError):
-        dataset = BasicDataset(dir_img, dir_mask, img_scale)
+        train_set = BasicDataset(dir_img, dir_mask, img_scale)
+        val_set = CarvanaDataset(val_img, val_mask, img_scale)
+        
 
     # 2. Split into train / validation partitions
-    n_val = int(len(dataset) * val_percent)
-    n_train = len(dataset) - n_val
-    train_set, val_set = random_split(dataset, [n_train, n_val], generator=torch.Generator().manual_seed(0))
-
+    n_val = len(val_set)
+    n_train = len(train_set)
+    # train_set, test_set = random_split(train_set, [858, 1284-858], generator=torch.Generator().manual_seed(0))
+    # n_train=856
     # 3. Create data loaders
-    loader_args = dict(batch_size=batch_size, num_workers=os.cpu_count(), pin_memory=True)
+    loader_args = dict(batch_size=batch_size, num_workers=4, pin_memory=True)
     train_loader = DataLoader(train_set, shuffle=True, **loader_args)
     val_loader = DataLoader(val_set, shuffle=False, drop_last=True, **loader_args)
 
@@ -199,14 +210,17 @@ def train_model(
         epoch_loss = 0
         with tqdm(total=n_train, desc=f'Epoch {epoch}/{epochs}', unit='img') as pbar:
             for batch in train_loader:
+                # print("images: ",images.shape)
+                # print("maskss: ",true_masks.shape)
+                
                 images, true_masks = batch['image'], batch['mask']
 
                 images = images.to(device=device, dtype=torch.float32, memory_format=torch.channels_last)
                 true_masks = true_masks.to(device=device, dtype=torch.long)
 
-                # 生成距离图
-                dist_maps_single = torch.tensor(one_hot2dist(true_masks.cpu().numpy()), device=device)
-                dist_maps = torch.cat([dist_maps_single, dist_maps_single], dim=1)  # 复制第一个通道创建第二个通道
+                # # 生成距离图
+                # dist_maps_single = torch.tensor(one_hot2dist(true_masks.cpu().numpy()), device=device)
+                # dist_maps = torch.cat([dist_maps_single, dist_maps_single], dim=1)  # 复制第一个通道创建第二个通道
 
                 with torch.autocast(device.type if device.type != 'mps' else 'cpu', enabled=amp):
                     # 处理输入图像
@@ -214,7 +228,7 @@ def train_model(
 
                     # 模型推理
                     masks_pred= model(images)
-
+                   
                     # 计算损失
                     loss = criterion(masks_pred, true_masks)  # 主分割任务损失
 
@@ -313,7 +327,7 @@ def train_model(
             if epoch==epochs:
                 Path(dir_checkpoint).mkdir(parents=True, exist_ok=True)
                 state_dict = model.state_dict()
-                state_dict['mask_values'] = dataset.mask_values
+                state_dict['mask_values'] = train_set.mask_values
                 torch.save(state_dict, str(dir_checkpoint / 'checkpoint_epoch{}.pth'.format(epoch)))
                 logging.info(f'Checkpoint {epoch} saved!')
 
@@ -323,7 +337,7 @@ def train_model(
 def get_args():
     parser = argparse.ArgumentParser(description='Train the UNet on images and target masks')
     parser.add_argument('--epochs', '-e', metavar='E', type=int, default=50, help='Number of epochs')
-    parser.add_argument('--batch-size', '-b', dest='batch_size', metavar='B', type=int, default=8, help='Batch size')
+    parser.add_argument('--batch-size', '-b', dest='batch_size', metavar='B', type=int, default=3, help='Batch size')
     parser.add_argument('--learning-rate', '-l', metavar='LR', type=float, default=1e-5,
                         help='Learning rate', dest='lr')
     parser.add_argument('--load', '-f', type=str, default=False, help='Load model from a .pth file')
@@ -343,7 +357,7 @@ if __name__ == '__main__':
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logging.info(f'Using device {device}')
     # Initialize TensorBoard writer
-    log_dir = f'/root/tf-logs/{time.strftime("%Y-%m-%d_%H-%M-%S")}'
+    log_dir = f'/root/tf-logs/{time.strftime("%Y-%m-%d_%H-%M-%S")}/dual1'
     writer = SummaryWriter(log_dir=log_dir)
     model = DualBranchUNetCBAMResnet1(n_classes=args.classes, n_channels=3, writer=writer)
     model = model.to(memory_format=torch.channels_last)

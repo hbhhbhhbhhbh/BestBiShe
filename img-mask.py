@@ -1,60 +1,67 @@
-import numpy as np
-import cv2
 from PIL import Image
-import torch
-import matplotlib.pyplot as plt
+from pathlib import Path
+import os
 
-# 读取 PNG 图像 (RGB 图像)
-def load_image(image_path):
-    img = Image.open(image_path).convert('RGB')  # 确保是 RGB 图像
-    img = np.array(img)  # 转为 NumPy 数组
-    return img
+# 目标尺寸
+target_size = (128, 128)
 
-# 读取 JPG 图像 (黑白掩码)
-def load_mask(mask_path):
-    mask = Image.open(mask_path).convert('L')  # 转为灰度图
-    mask = np.array(mask)  # 转为 NumPy 数组
-    return mask
-def save_image(image, output_path):
-    """
-    保存图像到文件
-    :param image: 叠加后的图像
-    :param output_path: 输出文件路径
-    """
-    cv2.imwrite(output_path, cv2.cvtColor(image, cv2.COLOR_RGB2BGR))  # 保存为 BGR 格式
+# 数据集文件夹结构
+data_folders = {
+    'train': {'imgs': './data2/imgs/train/', 'masks': './data2/masks/train/'},
+    'val': {'imgs': './data2/imgs/val/', 'masks': './data2/masks/val/'},
+    'test': {'imgs': './data2/imgs/test/', 'masks': './data2/masks/test/'}
+}
 
-def overlay_mask_on_image(image, mask, alpha=0.5):
-    """
-    将掩码叠加到图像上
-    :param image: 原始图像 (H, W, C) RGB 图像
-    :param mask: 黑白掩码 (H, W)，掩码为0表示背景，为1表示前景
-    :param alpha: 掩码的透明度，取值范围为[0, 1]
-    :return: 叠加后的图像
-    """
-    # 创建一个红色的掩码图像
-    colored_mask = np.zeros_like(image)
-    colored_mask[mask == 255] = [255, 0, 0]  # 红色
+# 输出文件夹结构
+output_folders = {
+    'train': {'imgs': './data2_resized/imgs/train/', 'masks': './data2_resized/masks/train/'},
+    'val': {'imgs': './data2_resized/imgs/val/', 'masks': './data2_resized/masks/val/'},
+    'test': {'imgs': './data2_resized/imgs/test/', 'masks': './data2_resized/masks/test/'}
+}
 
-    # 将掩码和原图叠加，调整透明度
-    overlay = cv2.addWeighted(image, 1 - alpha, colored_mask, alpha, 0)
+# 调整图像和掩码尺寸
+def resize_images_and_masks(input_img_dir, input_mask_dir, output_img_dir, output_mask_dir, target_size):
+    # 获取所有图像文件（过滤掉目录和非图像文件）
+    img_files = sorted([f for f in input_img_dir.glob('*') if f.is_file() and f.suffix.lower() in ['.bmp', '.jpg', '.png', '.jpeg']])
+    # 获取所有掩码文件（过滤掉目录和非图像文件）
+    mask_files = sorted([f for f in input_mask_dir.glob('*') if f.is_file() and f.suffix.lower() in ['.bmp', '.jpg', '.png', '.jpeg']])
 
-    return overlay
+    # 确保图像和掩码文件数量一致
+    if len(img_files) != len(mask_files):
+        print(f"Warning: Number of images ({len(img_files)}) and masks ({len(mask_files)}) do not match in {input_img_dir}!")
+        return
 
-# 假设 img_path 和 mask_path 是 PNG 和 JPG 文件路径
-img_path = 'baso3-1.jpg'  # 修改为你的PNG文件路径
-mask_path = 'output2.jpg'  # 修改为你的JPG掩码路径
-output_path = 'UNet.png'  # 叠加图像保存路径
+    # 遍历每对图像和掩码
+    for img_path, mask_path in zip(img_files, mask_files):
+        # 打开图像和掩码
+        img = Image.open(img_path)
+        mask = Image.open(mask_path)
 
-# 加载图像和掩码
-image = load_image(img_path)  # [H, W, C] 图像
-mask = load_mask(mask_path)   # [H, W] 掩码
+        # 调整尺寸
+        img_resized = img.resize(target_size, Image.Resampling.LANCZOS)
+        mask_resized = mask.resize(target_size, Image.Resampling.NEAREST)
 
-# 叠加图像和掩码
-overlay_image = overlay_mask_on_image(image, mask, alpha=0.5)
+        # 保存调整后的图像和掩码
+        img_output_path = os.path.join(output_img_dir, img_path.name)
+        mask_output_path = os.path.join(output_mask_dir, mask_path.name)
 
-# 保存叠加后的图像
-save_image(overlay_image, output_path)
-# 使用 Matplotlib 显示叠加后的图像
-plt.imshow(overlay_image)
-plt.axis('off')
-plt.show()
+        img_resized.save(img_output_path)
+        mask_resized.save(mask_output_path)
+
+        print(f"Resized and saved: {img_output_path}, {mask_output_path}")
+
+# 处理所有数据集
+for dataset_type, folders in data_folders.items():
+    input_img_dir = Path(folders['imgs'])
+    input_mask_dir = Path(folders['masks'])
+    output_img_dir = Path(output_folders[dataset_type]['imgs'])
+    output_mask_dir = Path(output_folders[dataset_type]['masks'])
+
+    # 创建输出文件夹
+    os.makedirs(output_img_dir, exist_ok=True)
+    os.makedirs(output_mask_dir, exist_ok=True)
+
+    # 调整图像和掩码尺寸
+    print(f"Processing {dataset_type} dataset...")
+    resize_images_and_masks(input_img_dir, input_mask_dir, output_img_dir, output_mask_dir, target_size)
+    print(f"Finished processing {dataset_type} dataset.\n")

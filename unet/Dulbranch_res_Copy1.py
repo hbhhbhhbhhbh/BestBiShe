@@ -71,7 +71,7 @@ class ASPP(nn.Module):
 class DualBranchUNetCBAMResnet1(nn.Module):
     def __init__(self, n_channels, n_classes, writer,bilinear=False):
         super(DualBranchUNetCBAMResnet1, self).__init__()
-        self.name="DBUCR"
+        self.name="DBUCR1"
         self.n_channels = n_channels
         self.n_classes = n_classes
         self.bilinear = bilinear
@@ -97,11 +97,9 @@ class DualBranchUNetCBAMResnet1(nn.Module):
         self.up4 = Up(128, 64, bilinear)
         self.outc = OutConv(64, n_classes)
         self.outM=OutConv(256,n_classes)
-        self.out1=OutConv(512,n_classes)
-        self.out2=OutConv(1024,n_classes)
-        self.maxpool=nn.MaxPool2d(kernel_size=2, stride=2)
         
         # self.cbam1 = CBAM(128)
+        self.MSAA=MSAA(64)
         self.MSAA1 = MSAA(256)
         self.MSAA2 = MSAA(512)
         self.MSAA3 = MSAA(1024 // factor)
@@ -133,17 +131,20 @@ class DualBranchUNetCBAMResnet1(nn.Module):
         
         #[3,128,128]
         x0=self.inc(x)
-        print("x0: ",x0.shape)
+        # print("x0: ",x0.shape)
+        # x0=self.MSAA(x0)
         x0=self.ASPP(x0)
         #[64,128,128]
         x1=self.resnet.layer1(x0)
         x1=self.MSAA1(x1)
         x1=self.ASPP1(x1)
+        # x1=self.cbam2(x1)
         # print("x1； ",x1.shape)
         #[128,64,64]
         x2=self.resnet.layer2(x1)
         x2=self.MSAA2(x2)
         x2=self.ASPP2(x2)
+        # x2=self.cbam3(x2)
         
         # print("x2； ",x2.shape)
         
@@ -151,19 +152,26 @@ class DualBranchUNetCBAMResnet1(nn.Module):
         x3=self.resnet.layer3(x2)
         x3=self.MSAA3(x3)
         x3=self.ASPP3(x3)
+        # x3=self.cbam4(x3)
+        
         # print("x3； ",x3.shape)
         
         #[512,16,16]
         x4=self.resnet.layer4(x3)
-        
-        
-        # print("x4； ",x4.shape)
+        # x4=self.MSAA4(x4)
+        # x4=self.ASPP4(x4)
         x4=self.cbam5(x4)
-        x3=self.up(x4,x3)
+        x3=self.up(x4,(x3))
+        # x3=self.MSAA3(x3)
+        # x3=self.ASPP3(x3)
         x3=self.cbam4(x3)
-        x2=self.up1(x3,x2)
+        x2=self.up1(x3,(x2))
+        # x2=self.MSAA2(x2)
+        # x2=self.ASPP2(x2)
         x2=self.cbam3(x2)
-        x1=self.up2(x2,x1)
+        x1=self.up2(x2,(x1))
+        # x1=self.MSAA1(x1)
+        # x1=self.ASPP1(x1)
         x1=self.cbam2(x1)
         # print("x3； ",x3.shape)
         # print("x2； ",x2.shape)
