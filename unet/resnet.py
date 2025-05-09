@@ -101,13 +101,13 @@ class ResNet(nn.Module):
         feat3 = conv1x1(512, 256).to(x.device)(feat3)  # [5, 256, 32, 32]
         feat4 = conv1x1(1024, 512).to(x.device)(feat4)  # [5, 512, 16, 16]
         feat5 = conv1x1(2048, 1024).to(x.device)(feat5)  # [5, 1024, 8, 8]
-        print("feat1: ",feat1.shape)
-        print("feat2: ",feat2.shape)
-        print("feat3: ",feat3.shape)
-        print("feat4: ",feat4.shape)
-        print("feat5: ",feat5.shape)
+        # print("feat1: ",feat1.shape)
+        # print("feat2: ",feat2.shape)
+        # print("feat3: ",feat3.shape)
+        # print("feat4: ",feat4.shape)
+        # print("feat5: ",feat5.shape)
         
-        return [feat1, feat2, feat3, feat5]
+        return [feat1, feat2, feat3, feat4,feat5]
 
 # 定义ResNet50
 def resnet50(pretrained=False, **kwargs):

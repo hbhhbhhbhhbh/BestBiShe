@@ -137,47 +137,49 @@ class DualBranchUNetCBAMResnet1(nn.Module):
         #[64,128,128]
         x1=self.resnet.layer1(x0)
         x1=self.MSAA1(x1)
-        x1=self.ASPP1(x1)
-        # x1=self.cbam2(x1)
+        # x1=self.ASPP1(x1)
+        x1=self.cbam2(x1)
         # print("x1； ",x1.shape)
         #[128,64,64]
         x2=self.resnet.layer2(x1)
         x2=self.MSAA2(x2)
-        x2=self.ASPP2(x2)
-        # x2=self.cbam3(x2)
+        # x2=self.ASPP2(x2)
+        x2=self.cbam3(x2)
         
         # print("x2； ",x2.shape)
         
         #[256,32,32]
         x3=self.resnet.layer3(x2)
         x3=self.MSAA3(x3)
-        x3=self.ASPP3(x3)
-        # x3=self.cbam4(x3)
+        # x3=self.ASPP3(x3)
+        x3=self.cbam4(x3)
         
-        # print("x3； ",x3.shape)
         
+        #瓶颈
         #[512,16,16]
         x4=self.resnet.layer4(x3)
         # x4=self.MSAA4(x4)
-        # x4=self.ASPP4(x4)
+        x4=self.ASPP4(x4)
         x4=self.cbam5(x4)
-        x3=self.up(x4,(x3))
+        #瓶颈
+        
+        x3=self.up(x4,self.ASPP3(x3))
         # x3=self.MSAA3(x3)
         # x3=self.ASPP3(x3)
         x3=self.cbam4(x3)
-        x2=self.up1(x3,(x2))
+        # x3=self.ASPP3(x3)
+        
+        x2=self.up1(x3,self.ASPP2(x2))
         # x2=self.MSAA2(x2)
         # x2=self.ASPP2(x2)
         x2=self.cbam3(x2)
-        x1=self.up2(x2,(x1))
+        
+        x1=self.up2(x2,self.ASPP1(x1))
         # x1=self.MSAA1(x1)
         # x1=self.ASPP1(x1)
         x1=self.cbam2(x1)
-        # print("x3； ",x3.shape)
-        # print("x2； ",x2.shape)
-        # print("x1； ",x1.shape)
+
         
-        # print("x: ",x.shape)
         #[1024,8,8]
         logits=self.outM(x1)
         # print("logits: ",logits.shape)

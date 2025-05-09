@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from unet.CBAM import CBAM
-from unet.resnet50 import resnet50
+from unet.resnet import resnet50
 from unet.unet_parts import Up, OutConv
 class unetUpWithCBAM(nn.Module):
     def __init__(self, in_size, out_size):
@@ -16,6 +16,7 @@ class unetUpWithCBAM(nn.Module):
 
     def forward(self, inputs1, inputs2):
         outputs = torch.cat([inputs1, self.up(inputs2)], 1)
+        # print("outputs: ",outputs.shape)
         outputs = self.conv1(outputs)
         outputs = self.relu(outputs)
         outputs = self.conv2(outputs)
@@ -23,11 +24,11 @@ class unetUpWithCBAM(nn.Module):
         outputs = self.cbam(outputs)  # 使用 CBAM 增强特征
         return outputs
 class UnetWithCBAM(nn.Module):
-    def __init__(self, n_classes=2, pretrained=False, backbone='vgg'):
+    def __init__(self, n_classes=2, pretrained=False, backbone='vgg',n_channels=3):
         super(UnetWithCBAM, self).__init__()
         self.n_classes = n_classes
-        self.resnet = resnet50(pretrained=pretrained)
-        in_filters = [192, 512, 1024, 3072]
+        self.resnet = resnet50(pretrained=False)
+        in_filters = [192, 384, 768, 1536]
         self.name="UCR"
         out_filters = [64, 128, 256, 512]
 
@@ -49,13 +50,13 @@ class UnetWithCBAM(nn.Module):
         )
         
 
-        self.final = nn.Conv2d(out_filters[0], n_classes, 1)
+        self.final = nn.Conv2d(out_filters[0], n_classes, kernel_size=3, stride=2, padding=1)
 
 #         self.final = DOConv2d(out_filters[0], num_classes, 1)
         self.backbone = backbone
 
     def forward(self, inputs):
-        
+        # print("inputs: ",inputs.shape)
         [feat1, feat2, feat3, feat4, feat5] = self.resnet.forward(inputs)
 
         up4 = self.up_concat4(feat4, feat5)
@@ -67,5 +68,5 @@ class UnetWithCBAM(nn.Module):
             up1 = self.up_conv(up1)
 
         final = self.final(up1)
-        
+        # print("out: ",final.shape)
         return final

@@ -20,8 +20,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from evaluate import evaluate
 from unet.unet_model import UNet
+from unet.SegNet import SegNet
 from unet.Dulbranch_res_Copy1 import DualBranchUNetCBAMResnet1
-
+from unet import UNet,UNetCBAM,UNetCBAMResnet
 from unet.Dulbranch_res import DualBranchUNetCBAMResnet
 from utils.data_loading import BasicDataset, CarvanaDataset
 from utils.dice_score import dice_loss
@@ -84,11 +85,13 @@ class CombinedLoss(nn.Module):
         total_loss = ce_loss +surface_loss*self.surface_loss_weight
         writer.add_scalar('surface_loss/surface_loss_weight', self.surface_loss_weight, global_step)
         return total_loss
-dataset_name='data1_resized_enhanced'
+dataset_name='data-enhanced4'
 dir_img = Path(f'./{dataset_name}/imgs/train/')
 dir_mask = Path(f'./{dataset_name}/masks/train/')
 val_img = Path(f'./{dataset_name}/imgs/val/')
 val_mask = Path(f'./{dataset_name}/masks/val/')
+test_img = Path(f'./{dataset_name}/imgs/test/')
+test_mask = Path(f'./{dataset_name}/masks/test/')
 dir_checkpoint = Path(f'./checkpoints-dual-{dataset_name}/')
 
 def overlay_two_masks(groundtruth_mask, pred_mask, alpha=0.5, pred_alpha=0.5):
@@ -163,11 +166,13 @@ def train_model(
     try:
         train_set = CarvanaDataset(dir_img, dir_mask, img_scale)
         val_set = CarvanaDataset(val_img, val_mask, img_scale)
+        test_set = CarvanaDataset(test_img, test_mask, img_scale)
+
         
     except (AssertionError, RuntimeError, IndexError):
         train_set = BasicDataset(dir_img, dir_mask, img_scale)
-        val_set = CarvanaDataset(val_img, val_mask, img_scale)
-        
+        val_set = BasicDataset(val_img, val_mask, img_scale)
+        test_set = BasicDataset(test_img, test_mask, img_scale)
 
     # 2. Split into train / validation partitions
     n_val = len(val_set)
@@ -178,7 +183,7 @@ def train_model(
     loader_args = dict(batch_size=batch_size, num_workers=4, pin_memory=True)
     train_loader = DataLoader(train_set, shuffle=True, **loader_args)
     val_loader = DataLoader(val_set, shuffle=False, drop_last=True, **loader_args)
-
+    test_loader = DataLoader(test_set, shuffle=False, drop_last=True, **loader_args)
     # Initialize TensorBoard writer
     # log_dir = f'/root/tf-logs/{time.strftime("%Y-%m-%d_%H-%M-%S")}/{model.name}'
     # writer = SummaryWriter(log_dir=log_dir)
@@ -207,6 +212,14 @@ def train_model(
     # 5. Begin training
     for epoch in range(1, epochs + 1):
         model.train()
+        val_score, acc, iou, f1, recall, precision = evaluate(model, test_loader, device, amp)
+        print(f"test: dice: {val_score} accuracy: {acc} iou: {iou} f1: {f1} recall: {recall} precision: {precision}")
+        writer.add_scalar('test/Dice/Val-dual-res', val_score, global_step)
+        writer.add_scalar('test/Accuracy/Val-dual-res', acc, global_step)
+        writer.add_scalar('test/IoU/Val-dual-res', iou, global_step)
+        writer.add_scalar('test/f1/Val-dual-res', f1, global_step)
+        writer.add_scalar('test/recall/Val-dual-res', recall, global_step)
+        writer.add_scalar('test/precision/Val-dual-res', precision, global_step)
         epoch_loss = 0
         with tqdm(total=n_train, desc=f'Epoch {epoch}/{epochs}', unit='img') as pbar:
             for batch in train_loader:
@@ -217,11 +230,6 @@ def train_model(
 
                 images = images.to(device=device, dtype=torch.float32, memory_format=torch.channels_last)
                 true_masks = true_masks.to(device=device, dtype=torch.long)
-
-                # # 生成距离图
-                # dist_maps_single = torch.tensor(one_hot2dist(true_masks.cpu().numpy()), device=device)
-                # dist_maps = torch.cat([dist_maps_single, dist_maps_single], dim=1)  # 复制第一个通道创建第二个通道
-
                 with torch.autocast(device.type if device.type != 'mps' else 'cpu', enabled=amp):
                     # 处理输入图像
                     p_images = process_images(images)
@@ -238,14 +246,6 @@ def train_model(
                         F.one_hot(true_masks.squeeze(1).to(torch.long), model.n_classes).permute(0, 3, 1, 2).float(),
                         multiclass=True
                     )
-
-                    # print("masks_pred: ",masks_pred.shape)
-                    # total_loss = loss+dice_loss(
-                    #         F.softmax(masks_pred, dim=1).float(),
-                    #         F.one_hot(true_masks, model.n_classes).permute(0, 3, 1, 2).float(),
-                    #         multiclass=True
-                    #     )
-                    # print("loss: ",total_loss)
                     total_loss=loss
                 optimizer.zero_grad(set_to_none=True)
                 grad_scaler.scale(total_loss).backward()
@@ -253,7 +253,6 @@ def train_model(
                 torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clipping)
                 grad_scaler.step(optimizer)
                 grad_scaler.update()
-
                 pbar.update(images.shape[0])
                 global_step += 1
                 epoch_loss += total_loss.item()
@@ -263,17 +262,12 @@ def train_model(
                 # if epoch >epoch*0.8:
                 #     criterion.surface_loss_weight=1.5
                 if global_step % 50 == 0:  # Log every 100 steps
-                    # writer.add_image('Train/Image', images[0], global_step)
-                    # writer.add_image('Train/Mask', true_masks[0].unsqueeze(0), global_step)  # Add channel dimension
-                    # writer.add_image('Train/Prediction', masks_pred.argmax(dim=1)[0], global_step)
-                   # Log images, true masks, and predictions to TensorBoard
                     overlay_image = overlay_two_masks(
                         true_masks[0],  # Ground truth mask
                         masks_pred.argmax(dim=1)[0],  # Prediction mask
                         alpha=0.5,  # Ground truth mask 的透明度
                         pred_alpha=0.7  # Prediction mask 的透明度
                     )
-
                     # 将合成图像记录到 TensorBoard
                     writer.add_image('Train-dual-Res/MaskOverlay', torch.tensor(overlay_image).permute(2, 0, 1), global_step)
                     overlay_image = overlay_mask_on_image(images[0], masks_pred.argmax(dim=1)[0])
@@ -329,7 +323,7 @@ def train_model(
                 state_dict = model.state_dict()
                 state_dict['mask_values'] = train_set.mask_values
                 torch.save(state_dict, str(dir_checkpoint / 'checkpoint_epoch{}.pth'.format(epoch)))
-                logging.info(f'Checkpoint {epoch} saved!')
+                logging.info(f'Checkpoint {model.name} saved!')
 
     # Close TensorBoard writer
     writer.close()
@@ -337,7 +331,7 @@ def train_model(
 def get_args():
     parser = argparse.ArgumentParser(description='Train the UNet on images and target masks')
     parser.add_argument('--epochs', '-e', metavar='E', type=int, default=50, help='Number of epochs')
-    parser.add_argument('--batch-size', '-b', dest='batch_size', metavar='B', type=int, default=3, help='Batch size')
+    parser.add_argument('--batch-size', '-b', dest='batch_size', metavar='B', type=int, default=5, help='Batch size')
     parser.add_argument('--learning-rate', '-l', metavar='LR', type=float, default=1e-5,
                         help='Learning rate', dest='lr')
     parser.add_argument('--load', '-f', type=str, default=False, help='Load model from a .pth file')
@@ -359,7 +353,7 @@ if __name__ == '__main__':
     # Initialize TensorBoard writer
     log_dir = f'/root/tf-logs/{time.strftime("%Y-%m-%d_%H-%M-%S")}/dual1'
     writer = SummaryWriter(log_dir=log_dir)
-    model = DualBranchUNetCBAMResnet1(n_classes=args.classes, n_channels=3, writer=writer)
+    model = DualBranchUNetCBAMResnet1(n_classes=args.classes, n_channels=3,writer=writer)
     model = model.to(memory_format=torch.channels_last)
     
     if args.load:

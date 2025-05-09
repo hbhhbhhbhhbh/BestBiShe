@@ -1,60 +1,127 @@
-import imgaug.augmenters as iaa  # 导入iaa
-import cv2
-import glob
 import os
+import cv2
 import numpy as np
- 
-if __name__ == '__main__':
-    dataname="data1_resized"
-    filedir="test"
-    img_dir = f'{dataname}/imgs/{filedir}'	# 图片文件路径
-    msk_dir = f'{dataname}/masks/{filedir}'	# 标签文件路径
-    #img_type = '.png'
-    img_tmp_dir = f'{dataname}-enhanced/imgs/{filedir}'	# 输出图片文件路径
-    msk_tmp_dir = f'{dataname}-enhanced/masks/{filedir}'
-    if not os.path.exists(img_tmp_dir):
-            os.makedirs(img_tmp_dir)
-    if not os.path.exists(msk_tmp_dir):
-            os.makedirs(msk_tmp_dir)
-    img_list = os.listdir(img_dir)
-    msk_list = os.listdir(msk_dir)
-    print(img_list)
-    print(msk_list)
-    for i in range(len(img_list)):
-        img_name = img_list[i]
-        if(img_name.endswith(".jpg")):
-            pass
-        else: 
-            continue
-        msk_name = msk_list[i]
-        if(msk_name.endswith("png")):
-            pass
+import shutil
+from skimage import exposure, filters
+from skimage.util import img_as_ubyte
+from tqdm import tqdm
+
+class CellImageEnhancer:
+    def __init__(self):
+        self.gamma = 1.2
+        self.clip_limit = 3.0
+        self.tile_size = (8, 8)
+        
+    def apply_clahe(self, image):
+        """对比度受限的自适应直方图均衡化"""
+        if len(image.shape) == 3:
+            lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+            l, a, b = cv2.split(lab)
+            clahe = cv2.createCLAHE(clipLimit=self.clip_limit, tileGridSize=self.tile_size)
+            l = clahe.apply(l)
+            lab = cv2.merge((l, a, b))
+            return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
         else:
-            continue
-        img = cv2.imread(filename=img_dir + "/" + img_name)
-        img = np.expand_dims(img, axis=0).astype(np.float32)
-        msk = cv2.imread(filename=msk_dir + "/" + msk_name)
-        msk = np.expand_dims(msk, axis=0).astype(np.int32)
-        # 定义数据增强策略
-        # 每次选择一个翻转方式
-        seq = iaa.Sequential([
-            iaa.Fliplr(0.5),    # 水平翻转
-            iaa.Flipud(0.5),    # 垂直翻转
-            # iaa.GaussianBlur(sigma=(0, 3.0)),   # 高斯模糊
-            iaa.Sharpen(alpha=(0, 0.3), lightness=(0.9, 1.1)),  # 锐化处理
-            iaa.Affine(scale=(0.9, 1), translate_percent=(0, 0.1), rotate=(-40, 40), cval=0, mode='constant'),   # 仿射变换
-            # iaa.CropAndPad(px=(-10, 0), percent=None, pad_mode='constant', pad_cval=0, keep_size=True), # 裁剪缩放
-            # iaa.PiecewiseAffine(scale=(0, 0.05), nb_rows=4, nb_cols=4, cval=0),     # 以控制点的方式随机形变
-            iaa.ContrastNormalization((0.75, 1.5), per_channel=True),  # 对比度增强，0.75-1.5随机数值为alpha，该alpha应用于每个通道
-            # iaa.AdditiveGaussianNoise(loc=0, scale=(0.0, 0.05 * 255), per_channel=0.5),  # 高斯噪声
-            iaa.Multiply((0.8, 1.2), per_channel=0.2),  # 20%的图片像素值乘以0.8-1.2中间的数值,用以增加图片明亮度或改变颜色
-        ])
-        # 同时对原图和分割进行数据增强
-        for j in range(6):
-            img_aug, msk_aug = seq(images=img, segmentation_maps=msk)
-            img_out = img_tmp_dir+"/" + img_name.split(".")[0] + "_" + str(j) + '.jpg'
-            msk_out = msk_tmp_dir +"/"+ msk_name.split(".")[0] + "_" + str(j) + '.png'
-            cv2.imwrite(img_out, img_aug[0])
-            cv2.imwrite(msk_out, msk_aug[0,:,:,0])
-        print("正在进行数据增强"+img_name+" "+msk_name)
- 
+            clahe = cv2.createCLAHE(clipLimit=self.clip_limit, tileGridSize=self.tile_size)
+            return clahe.apply(image)
+    def hsv_color_normalization(self,img):
+        """针对H&E染色图像的专用颜色归一化"""
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        hsv[:, :, 0] = cv2.normalize(hsv[:, :, 0], None, 0, 180, cv2.NORM_MINMAX)  # 色调归一化
+        hsv[:, :, 1] = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8)).apply(hsv[:, :, 1])  # 饱和度增强
+        return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+
+    def gamma_correction(self, image):
+        """伽马校正"""
+        inv_gamma = 1.0 / self.gamma
+        table = np.array([((i / 255.0) ** inv_gamma) * 255 
+                         for i in np.arange(0, 256)]).astype("uint8")
+        return cv2.LUT(image, table)
+
+    def adaptive_denoising(self, image):
+        """自适应去噪"""
+        if len(image.shape) == 3:
+            return cv2.fastNlMeansDenoisingColored(image, None, 10, 10, 7, 21)
+        else:
+            return cv2.fastNlMeansDenoising(image, None, 10, 7, 21)
+
+    def edge_enhancement(self, image):
+        """边缘增强（修复了值范围问题）"""
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
+        edges = filters.sobel(gray)
+        
+        # 修复：确保值范围在[-1,1]之间
+        edges = exposure.rescale_intensity(edges, in_range='image', out_range=(-1, 1))
+        edges = img_as_ubyte(edges)  # 现在可以安全转换为ubyte
+        
+        # 确保边缘图像是单通道的
+        if len(image.shape) == 3:
+            edges = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
+        return edges
+
+    def enhance_image(self, image):
+        """完整的增强流程"""
+        # enhanced = self.gamma_correction(image)
+        enhanced = self.apply_clahe(image)
+        # enhanced = self.adaptive_denoising(enhanced)
+        # enhanced=image
+        edge_enhanced = self.hsv_color_normalization(enhanced)
+        edge_enhanced=self.edge_enhancement(edge_enhanced)
+        # 修复：确保两个图像尺寸和通道数匹配
+        if len(enhanced.shape) != len(edge_enhanced.shape):
+            if len(enhanced.shape) == 3:
+                edge_enhanced = cv2.cvtColor(edge_enhanced, cv2.COLOR_GRAY2BGR)
+            else:
+                edge_enhanced = cv2.cvtColor(edge_enhanced, cv2.COLOR_BGR2GRAY)
+        
+        final = cv2.addWeighted(enhanced, 0.7, edge_enhanced, 0.3, 0)
+        return final
+
+def process_dataset(input_root, output_root):
+    """处理整个数据集"""
+    enhancer = CellImageEnhancer()
+    
+    # 创建输出目录结构
+    os.makedirs(output_root, exist_ok=True)
+    os.makedirs(os.path.join(output_root, 'imgs'), exist_ok=True)
+    os.makedirs(os.path.join(output_root, 'masks'), exist_ok=True)
+    
+    # 处理所有图像子集
+    for subset in ['train', 'val', 'test']:
+        print(f"\nProcessing {subset} images...")
+        img_dir = os.path.join(input_root, 'imgs', subset)
+        output_img_dir = os.path.join(output_root, 'imgs', subset)
+        os.makedirs(output_img_dir, exist_ok=True)
+        
+        # 复制对应的mask目录结构
+        mask_src = os.path.join(input_root, 'masks', subset)
+        mask_dst = os.path.join(output_root, 'masks', subset)
+        if os.path.exists(mask_src):
+            if not os.path.exists(mask_dst):
+                shutil.copytree(mask_src, mask_dst)
+        
+        # 处理图像
+        img_files = [f for f in os.listdir(img_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tif', '.bmp'))]
+        for img_file in tqdm(img_files, desc=f"Enhancing {subset} images"):
+            img_path = os.path.join(img_dir, img_file)
+            output_path = os.path.join(output_img_dir, img_file)
+            
+            try:
+                # 读取并处理图像
+                img = cv2.imread(img_path)
+                if img is not None:
+                    enhanced_img = enhancer.enhance_image(img)
+                    cv2.imwrite(output_path, enhanced_img)
+                else:
+                    print(f"\nWarning: Could not read image {img_path}")
+            except Exception as e:
+                print(f"\nError processing {img_path}: {str(e)}")
+                continue
+
+if __name__ == "__main__":
+    input_dir = "data-pre"
+    output_dir = "data-enhanced4"
+    
+    # 处理整个数据集
+    process_dataset(input_dir, output_dir)
+    print(f"\nAll images processed and saved to {output_dir}")
