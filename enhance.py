@@ -9,7 +9,7 @@ from tqdm import tqdm
 class CellImageEnhancer:
     def __init__(self):
         self.gamma = 1.2
-        self.clip_limit = 3.0
+        self.clip_limit = 2.0
         self.tile_size = (8, 8)
         
     def apply_clahe(self, image):
@@ -65,8 +65,8 @@ class CellImageEnhancer:
         enhanced = self.apply_clahe(image)
         # enhanced = self.adaptive_denoising(enhanced)
         # enhanced=image
-        edge_enhanced = self.hsv_color_normalization(enhanced)
-        edge_enhanced=self.edge_enhancement(edge_enhanced)
+        # edge_enhanced = self.hsv_color_normalization(enhanced)
+        edge_enhanced=self.edge_enhancement(enhanced)
         # 修复：确保两个图像尺寸和通道数匹配
         if len(enhanced.shape) != len(edge_enhanced.shape):
             if len(enhanced.shape) == 3:
@@ -119,8 +119,8 @@ def process_dataset(input_root, output_root):
                 continue
 
 if __name__ == "__main__":
-    input_dir = "data-pre"
-    output_dir = "data-enhanced4"
+    input_dir = "data-GAN"
+    output_dir = "data-GANenhanced"
     
     # 处理整个数据集
     process_dataset(input_dir, output_dir)

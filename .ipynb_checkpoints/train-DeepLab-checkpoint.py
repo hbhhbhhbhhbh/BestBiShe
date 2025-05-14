@@ -93,7 +93,7 @@ val_img = Path(f'./{dataset_name}/imgs/val/')
 val_mask = Path(f'./{dataset_name}/masks/val/')
 test_img = Path(f'./{dataset_name}/imgs/test/')
 test_mask = Path(f'./{dataset_name}/masks/test/')
-dir_checkpoint = Path(f'./checkpoints-dual-{dataset_name}/')
+dir_checkpoint = Path(f'./checkpoints-dual-{dataset_name}-enhanced/')
 
 def overlay_two_masks(groundtruth_mask, pred_mask, alpha=0.5, pred_alpha=0.5):
     """
@@ -323,7 +323,7 @@ def train_model(
                 Path(dir_checkpoint).mkdir(parents=True, exist_ok=True)
                 state_dict = model.state_dict()
                 state_dict['mask_values'] = train_set.mask_values
-                torch.save(state_dict, str(dir_checkpoint / 'checkpoint_epoch{}.pth'.format(epoch)))
+                torch.save(state_dict, str(dir_checkpoint / 'Deeplab.pth'))
                 logging.info(f'Checkpoint {model.name} saved!')
 
     # Close TensorBoard writer

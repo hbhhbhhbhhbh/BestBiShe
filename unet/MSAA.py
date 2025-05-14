@@ -32,7 +32,6 @@ class MSAA(nn.Module):
         x1 = self.conv3x3(x)
         x2 = self.conv5x5(x)
         x3 = self.conv7x7(x)
-        
         # 多尺度特征融合（相加）
         x_fused = x1 + x2 + x3
         

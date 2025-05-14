@@ -322,7 +322,7 @@ def train_model(
                 Path(dir_checkpoint).mkdir(parents=True, exist_ok=True)
                 state_dict = model.state_dict()
                 state_dict['mask_values'] = train_set.mask_values
-                torch.save(state_dict, str(dir_checkpoint / 'checkpoint_epoch{}.pth'.format(epoch)))
+                torch.save(state_dict, str(dir_checkpoint / 'SegNet.pth'))
                 logging.info(f'Checkpoint {model.name} saved!')
 
     # Close TensorBoard writer

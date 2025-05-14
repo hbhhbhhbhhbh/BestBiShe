@@ -28,6 +28,7 @@ from utils.data_loading import BasicDataset, CarvanaDataset
 from utils.dice_score import dice_loss
 from torch.utils.tensorboard import SummaryWriter
 from utils.distance_transform import one_hot2dist, SurfaceLoss
+from utils.Loss import edge_loss
 def process_images(images):
     """
     处理图像：RGB → HSV → 处理 V 分量 → 转换回 RGB
@@ -85,7 +86,7 @@ class CombinedLoss(nn.Module):
         total_loss = ce_loss +surface_loss*self.surface_loss_weight
         writer.add_scalar('surface_loss/surface_loss_weight', self.surface_loss_weight, global_step)
         return total_loss
-dataset_name='data-enhanced4'
+dataset_name='data-GANenhanced'
 dir_img = Path(f'./{dataset_name}/imgs/train/')
 dir_mask = Path(f'./{dataset_name}/masks/train/')
 val_img = Path(f'./{dataset_name}/imgs/val/')
@@ -206,7 +207,7 @@ def train_model(
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=5)
     grad_scaler = torch.cuda.amp.GradScaler(enabled=amp)
     # criterion = CombinedLoss(idc=[1], surface_loss_weight=1)
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss();
     global_step = 0
 
     # 5. Begin training
@@ -240,12 +241,12 @@ def train_model(
                     # 计算损失
                     loss = criterion(masks_pred, true_masks)  # 主分割任务损失
 
-                    # 添加 Dice 损失
-                    loss = loss + dice_loss(
-                        F.softmax(masks_pred, dim=1).float(),
-                        F.one_hot(true_masks.squeeze(1).to(torch.long), model.n_classes).permute(0, 3, 1, 2).float(),
-                        multiclass=True
-                    )
+#                     # 添加 Dice 损失
+#                     loss = loss + dice_loss(
+#                         F.softmax(masks_pred, dim=1).float(),
+#                         F.one_hot(true_masks.squeeze(1).to(torch.long), model.n_classes).permute(0, 3, 1, 2).float(),
+#                         multiclass=True
+#                     )
                     total_loss=loss
                 optimizer.zero_grad(set_to_none=True)
                 grad_scaler.scale(total_loss).backward()
@@ -322,7 +323,7 @@ def train_model(
                 Path(dir_checkpoint).mkdir(parents=True, exist_ok=True)
                 state_dict = model.state_dict()
                 state_dict['mask_values'] = train_set.mask_values
-                torch.save(state_dict, str(dir_checkpoint / 'checkpoint_epoch{}.pth'.format(epoch)))
+                torch.save(state_dict, str(dir_checkpoint / 'checkpoint_epoch{}.pth'.format(dataset_name)))
                 logging.info(f'Checkpoint {model.name} saved!')
 
     # Close TensorBoard writer

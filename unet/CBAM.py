@@ -18,7 +18,6 @@ class ChannelAttentionModule(nn.Module):
         mid_channel = c1 // reduction
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.max_pool = nn.AdaptiveMaxPool2d(1)
-
         self.shared_MLP = nn.Sequential(
             nn.Linear(in_features=c1, out_features=mid_channel),
             nn.LeakyReLU(0.1, inplace=True),
@@ -30,22 +29,18 @@ class ChannelAttentionModule(nn.Module):
         avgout = self.shared_MLP(self.avg_pool(x).view(x.size(0),-1)).unsqueeze(2).unsqueeze(3)
         maxout = self.shared_MLP(self.max_pool(x).view(x.size(0),-1)).unsqueeze(2).unsqueeze(3)
         return self.act(avgout + maxout)
-      
-    #详细改进流程和操作，请关注B站博主：AI学术叫叫兽       
 class SpatialAttentionModule(nn.Module):
     def __init__(self):
         super(SpatialAttentionModule, self).__init__()    
-    #详细改进流程和操作，请关注B站博主：AI学术叫叫兽 
         self.conv2d = nn.Conv2d(in_channels=2, out_channels=1, kernel_size=7, stride=1, padding=3)    
-    #详细改进流程和操作，请关注B站博主：AI学术叫叫兽 
         self.act = nn.Sigmoid()
     def forward(self, x):
         avgout = torch.mean(x, dim=1, keepdim=True)
         maxout, _ = torch.max(x, dim=1, keepdim=True)
         out = torch.cat([avgout, maxout], dim=1)
-        out = self.act(self.conv2d(out))#详细改进流程和操作，请关注B站博主：Ai学术叫叫兽 er,畅享一对一指点迷津，已指导无数家人拿下学术硕果！！！
+        out = self.act(self.conv2d(out))
         return out    
-    #详细改进流程和操作，请关注B站博主：AI学术叫叫兽 
+
 
 
 class CBAM(nn.Module):

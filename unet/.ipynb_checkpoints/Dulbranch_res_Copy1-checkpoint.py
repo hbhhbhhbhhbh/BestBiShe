@@ -99,12 +99,14 @@ class DualBranchUNetCBAMResnet1(nn.Module):
         self.outM=OutConv(256,n_classes)
         
         # self.cbam1 = CBAM(128)
+        #多尺度卷积注意力机制融合
         self.MSAA=MSAA(64)
         self.MSAA1 = MSAA(256)
         self.MSAA2 = MSAA(512)
         self.MSAA3 = MSAA(1024 // factor)
         self.MSAA4 = MSAA(2048 // factor)
         
+        #多尺度空洞卷积
         self.ASPP=ASPP(64,64)
         self.ASPP1 = ASPP(256,256)
         self.ASPP2 = ASPP(512,512)
